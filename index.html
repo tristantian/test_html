@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+</head>
+<body>
+  <h2>Python Live Runner</h2>
+
+  <textarea id="code" rows="10" cols="60">
+print("Hello from Python!")
+  </textarea>
+  <br>
+  <button onclick="runPython()">Run</button>
+
+  <pre id="output"></pre>
+
+  <script>
+    let pyodideReadyPromise = loadPyodide();
+
+    async function runPython() {
+      let pyodide = await pyodideReadyPromise;
+      let code = document.getElementById("code").value;
+      try {
+        let result = await pyodide.runPythonAsync(code);
+        document.getElementById("output").innerText =
+          result !== undefined ? result : "Done";
+      } catch (err) {
+        document.getElementById("output").innerText = err;
+      }
+    }
+  </script>
+</body>
+</html>
