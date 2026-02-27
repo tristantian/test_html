@@ -1,34 +1,33 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>基金实时显示工具</title>
+  <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
 </head>
 <body>
-  <h2>Python Live Runner</h2>
+  <div class="container">
+    <h1>基金实时显示工具</h1>
 
-  <textarea id="code" rows="10" cols="60">
-print("Hello from Python!")
-  </textarea>
-  <br>
-  <button onclick="runPython()">Run</button>
+    <div class="input-container">
+      <label for="fundCode">基金代码：</label>
+      <input id="fundCode" type="text" value="000001" placeholder="请输入基金代码">
+      <button onclick="fetchFund(document.getElementById('fundCode').value)">刷新数据</button>
+    </div>
 
-  <pre id="output"></pre>
+    <div class="output">
+      <h2>基金数据</h2>
+      <pre id="output">数据加载中...</pre>
+    </div>
 
-  <script>
-    let pyodideReadyPromise = loadPyodide();
+    <div class="chart">
+      <h2>历史价格变化</h2>
+      <div id="chart-container"></div>
+    </div>
+  </div>
 
-    async function runPython() {
-      let pyodide = await pyodideReadyPromise;
-      let code = document.getElementById("code").value;
-      try {
-        let result = await pyodide.runPythonAsync(code);
-        document.getElementById("output").innerText =
-          result !== undefined ? result : "Done";
-      } catch (err) {
-        document.getElementById("output").innerText = err;
-      }
-    }
-  </script>
+  <script src="main.js"></script>
 </body>
 </html>
