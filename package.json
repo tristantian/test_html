@@ -1,0 +1,11 @@
+{
+  "name": "fund-tool-proxy",
+  "private": true,
+  "scripts": {
+    "worker:dev": "wrangler dev proxy/cloudflare-worker.js",
+    "worker:deploy": "wrangler deploy proxy/cloudflare-worker.js"
+  },
+  "devDependencies": {
+    "wrangler": "^4.11.1"
+  }
+}
