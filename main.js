@@ -184,13 +184,6 @@ async function lookupFundName(code) {
   }
 }
 
-function fetchFundEstimate(code) {
-  return loadScriptJsonp(
-    callbackName => `https://fund.eastmoney.com/data/funddataforgznew.aspx?cb=${callbackName}&fc=${code}&t=basewap&_=${Date.now()}`,
-    'estimateCallback'
-  );
-}
-
 function resetPingzhongGlobals() {
   delete window.fS_name;
   delete window.fS_code;
@@ -227,6 +220,22 @@ function loadEastmoneyPingzhongData(code) {
   });
 }
 
+function buildQuoteFromPingzhongData(pingzhongData) {
+  const trend = pingzhongData?.netWorthTrend || [];
+  const latest = trend.at(-1);
+  if (!latest || !latest.y) return null;
+
+  return {
+    fundcode: pingzhongData.code,
+    name: pingzhongData.name,
+    dwjz: String(latest.y),
+    gsz: String(latest.y),
+    gszzl: String(latest.equityReturn ?? 0),
+    jzrq: getLocalDateString(new Date(latest.x)),
+    source: 'eastmoney-pingzhong'
+  };
+}
+
 async function fetchFundHistory(code, pageSize = 30) {
   const pingzhongData = await loadEastmoneyPingzhongData(code);
   const trend = pingzhongData.netWorthTrend || [];
@@ -242,21 +251,12 @@ async function fetchFundHistory(code, pageSize = 30) {
 }
 
 async function fetchFundQuote(code, fallbackName = '') {
-  const estimateData = await fetchFundEstimate(code);
-  if (!estimateData || !estimateData.fundcode || !estimateData.dwjz) return null;
+  const pingzhongData = await loadEastmoneyPingzhongData(code);
+  const quote = buildQuoteFromPingzhongData(pingzhongData);
+  if (!quote) return null;
 
-  const fundName = fallbackName || estimateData.name || await lookupFundName(code);
-
-  return {
-    fundcode: estimateData.fundcode,
-    name: fundName,
-    dwjz: estimateData.dwjz,
-    gsz: estimateData.gsz || estimateData.dwjz,
-    gszzl: estimateData.gszzl || '0',
-    jzrq: estimateData.jzrq,
-    gztime: estimateData.gztime || '',
-    source: 'eastmoney-estimate'
-  };
+  quote.name = fallbackName || quote.name || await lookupFundName(code);
+  return quote;
 }
 
 // 查询基金
@@ -284,9 +284,7 @@ async function searchFund() {
     document.getElementById('previewFundName').textContent = data.name || `基金 ${data.fundcode}`;
     document.getElementById('previewFundCode').textContent = data.fundcode;
     document.getElementById('previewNav').textContent = data.dwjz + ' 元 (' + data.jzrq + ')';
-    document.getElementById('previewEstNav').textContent = data.gztime
-      ? `${data.gsz} 元 (${data.gztime})`
-      : `${data.gsz} 元`;
+    document.getElementById('previewEstNav').textContent = `${data.gsz} 元 (东财最新净值)`;
     
     const changeVal = parseFloat(data.gszzl);
     const changeEl = document.getElementById('previewEstChange');
@@ -296,7 +294,7 @@ async function searchFund() {
     // 自动填入最新净值作为买入价参考
     document.getElementById('buyPrice').value = data.dwjz;
     
-    showToast('查询成功，当前展示的是东财盘中估值', 'success');
+    showToast('查询成功，当前展示的是东财最新净值', 'success');
   } catch (err) {
     showToast('查询失败: ' + err.message, 'error');
   }
