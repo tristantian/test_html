@@ -116,6 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // 临时存储查询到的基金信息
 let currentSearchResult = null;
 let fundCatalogPromise = null;
+const pingzhongDataCache = new Map();
 
 function loadScriptJsonp(src, callbackPrefix) {
   return new Promise((resolve, reject) => {
@@ -183,29 +184,78 @@ async function lookupFundName(code) {
   }
 }
 
-// 获取基金历史净值 (通过东财 JSONP)
-function fetchFundHistory(code, pageSize = 30) {
+function fetchFundEstimate(code) {
   return loadScriptJsonp(
-    callbackName => `https://api.fund.eastmoney.com/f10/lsjz?callback=${callbackName}&fundCode=${code}&pageIndex=1&pageSize=${pageSize}&startDate=&endDate=&_=${Date.now()}`,
-    'histCallback'
+    callbackName => `https://fund.eastmoney.com/data/funddataforgznew.aspx?cb=${callbackName}&fc=${code}&t=basewap&_=${Date.now()}`,
+    'estimateCallback'
   );
 }
 
-async function fetchFundQuote(code, fallbackName = '') {
-  const historyData = await fetchFundHistory(code, 5);
-  const latest = historyData?.Data?.LSJZList?.[0];
-  if (!latest || !latest.DWJZ) return null;
+function resetPingzhongGlobals() {
+  delete window.fS_name;
+  delete window.fS_code;
+  delete window.Data_netWorthTrend;
+}
 
-  const fundName = fallbackName || await lookupFundName(code);
+function loadEastmoneyPingzhongData(code) {
+  if (pingzhongDataCache.has(code)) {
+    return Promise.resolve(pingzhongDataCache.get(code));
+  }
+
+  return new Promise((resolve, reject) => {
+    resetPingzhongGlobals();
+    const script = document.createElement('script');
+    script.src = `https://fund.eastmoney.com/pingzhongdata/${code}.js?v=${Date.now()}`;
+
+    script.onload = () => {
+      const payload = {
+        code: window.fS_code || code,
+        name: window.fS_name || `基金 ${code}`,
+        netWorthTrend: Array.isArray(window.Data_netWorthTrend) ? [...window.Data_netWorthTrend] : []
+      };
+      pingzhongDataCache.set(code, payload);
+      script.remove();
+      resolve(payload);
+    };
+
+    script.onerror = () => {
+      script.remove();
+      reject(new Error('基金历史数据请求失败'));
+    };
+
+    document.head.appendChild(script);
+  });
+}
+
+async function fetchFundHistory(code, pageSize = 30) {
+  const pingzhongData = await loadEastmoneyPingzhongData(code);
+  const trend = pingzhongData.netWorthTrend || [];
+  return {
+    Data: {
+      LSJZList: trend.slice(-pageSize).map(item => ({
+        FSRQ: getLocalDateString(new Date(item.x)),
+        DWJZ: item.y,
+        JZZZL: item.equityReturn
+      }))
+    }
+  };
+}
+
+async function fetchFundQuote(code, fallbackName = '') {
+  const estimateData = await fetchFundEstimate(code);
+  if (!estimateData || !estimateData.fundcode || !estimateData.dwjz) return null;
+
+  const fundName = fallbackName || estimateData.name || await lookupFundName(code);
 
   return {
-    fundcode: code,
+    fundcode: estimateData.fundcode,
     name: fundName,
-    dwjz: latest.DWJZ,
-    gsz: latest.DWJZ,
-    gszzl: latest.JZZZL || '0',
-    jzrq: latest.FSRQ,
-    source: 'eastmoney-nav'
+    dwjz: estimateData.dwjz,
+    gsz: estimateData.gsz || estimateData.dwjz,
+    gszzl: estimateData.gszzl || '0',
+    jzrq: estimateData.jzrq,
+    gztime: estimateData.gztime || '',
+    source: 'eastmoney-estimate'
   };
 }
 
@@ -234,7 +284,9 @@ async function searchFund() {
     document.getElementById('previewFundName').textContent = data.name || `基金 ${data.fundcode}`;
     document.getElementById('previewFundCode').textContent = data.fundcode;
     document.getElementById('previewNav').textContent = data.dwjz + ' 元 (' + data.jzrq + ')';
-    document.getElementById('previewEstNav').textContent = `${data.gsz} 元 (东财最新净值)`;
+    document.getElementById('previewEstNav').textContent = data.gztime
+      ? `${data.gsz} 元 (${data.gztime})`
+      : `${data.gsz} 元`;
     
     const changeVal = parseFloat(data.gszzl);
     const changeEl = document.getElementById('previewEstChange');
@@ -244,7 +296,7 @@ async function searchFund() {
     // 自动填入最新净值作为买入价参考
     document.getElementById('buyPrice').value = data.dwjz;
     
-    showToast('查询成功，当前展示的是东财最新净值', 'success');
+    showToast('查询成功，当前展示的是东财盘中估值', 'success');
   } catch (err) {
     showToast('查询失败: ' + err.message, 'error');
   }
