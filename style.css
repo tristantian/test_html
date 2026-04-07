@@ -455,6 +455,22 @@ body {
   white-space: nowrap;
 }
 
+select {
+  width: 100%;
+  padding: 12px 16px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  background: white;
+  transition: border-color 0.2s;
+  outline: none;
+}
+
+select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.1);
+}
+
 /* ===== 搜索结果 ===== */
 .search-result {
   margin-top: 20px;
@@ -514,6 +530,54 @@ body {
 .chart-container {
   width: 100%;
   min-height: 350px;
+}
+
+.prediction-toolbar {
+  display: flex;
+  gap: 16px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.prediction-toolbar .form-group {
+  flex: 1;
+  min-width: 220px;
+  margin-bottom: 0;
+}
+
+.prediction-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.prediction-card {
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+  border: 1px solid #e6eef9;
+  border-radius: var(--radius-sm);
+  padding: 16px;
+}
+
+.prediction-card-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-light);
+  margin-bottom: 6px;
+}
+
+.prediction-card-value {
+  display: block;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.prediction-note {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 /* ===== 历史记录表格 ===== */
@@ -763,6 +827,11 @@ body {
 
   .form-card {
     padding: 20px;
+  }
+
+  .prediction-toolbar .btn {
+    width: 100%;
+    justify-content: center;
   }
 
   .chart-container {

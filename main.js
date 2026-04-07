@@ -33,6 +33,8 @@ function refreshCurrentTabViews() {
   if (activeTab === 'yield-curve') {
     updateYieldChart(getActiveChartRange());
     updateAllocationChart();
+  } else if (activeTab === 'forecast') {
+    refreshPredictionFundOptions();
   } else if (activeTab === 'history') {
     renderHistory();
   }
@@ -91,6 +93,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (tabId === 'yield-curve') {
         updateYieldChart(7);
         updateAllocationChart();
+      } else if (tabId === 'forecast') {
+        refreshPredictionFundOptions();
       } else if (tabId === 'history') {
         renderHistory();
       }
@@ -103,18 +107,19 @@ document.addEventListener('DOMContentLoaded', () => {
   // 初始化页面
   renderFundList();
   updateSummary();
+  refreshPredictionFundOptions();
   renderHistory();
 });
 
-// ==================== 基金查询 (天天基金API) ====================
+// ==================== 基金查询 (东财接口) ====================
 
 // 临时存储查询到的基金信息
 let currentSearchResult = null;
+let fundCatalogPromise = null;
 
-// 通过JSONP方式获取基金实时估值数据
-function fetchFundEstimate(code) {
+function loadScriptJsonp(src, callbackPrefix) {
   return new Promise((resolve, reject) => {
-    const callbackName = `fundCallback_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    const callbackName = `${callbackPrefix}_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const script = document.createElement('script');
     
     window[callbackName] = function(data) {
@@ -128,9 +133,8 @@ function fetchFundEstimate(code) {
       delete window[callbackName];
       document.head.removeChild(script);
     };
-    
-    // 天天基金估值接口
-    script.src = `https://fundgz.1702.com/js/${code}.js?rt=${Date.now()}&callback=${callbackName}`;
+
+    script.src = src(callbackName);
     document.head.appendChild(script);
     
     // 超时处理
@@ -144,35 +148,65 @@ function fetchFundEstimate(code) {
   });
 }
 
-// 获取基金历史净值 (通过天天基金JSONP)
-function fetchFundHistory(code, pageSize = 30) {
-  return new Promise((resolve, reject) => {
-    const callbackName = `histCallback_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+function loadEastmoneyFundCatalog() {
+  if (fundCatalogPromise) return fundCatalogPromise;
+
+  fundCatalogPromise = new Promise((resolve, reject) => {
+    if (Array.isArray(window.r) && window.r.length > 0) {
+      resolve(window.r);
+      return;
+    }
+
     const script = document.createElement('script');
-    
-    window[callbackName] = function(data) {
-      resolve(data);
-      delete window[callbackName];
-      document.head.removeChild(script);
-    };
-    
-    script.onerror = function() {
-      reject(new Error('请求失败'));
-      delete window[callbackName];
-      document.head.removeChild(script);
-    };
-    
-    script.src = `https://api.fund.eastmoney.com/f10/lsjz?callback=${callbackName}&fundCode=${code}&pageIndex=1&pageSize=${pageSize}&startDate=&endDate=&_=${Date.now()}`;
-    document.head.appendChild(script);
-    
-    setTimeout(() => {
-      if (window[callbackName]) {
-        reject(new Error('请求超时'));
-        delete window[callbackName];
-        if (script.parentNode) document.head.removeChild(script);
+    script.src = `https://fund.eastmoney.com/js/fundcode_search.js?v=${Date.now()}`;
+    script.onload = () => {
+      if (Array.isArray(window.r)) {
+        resolve(window.r);
+      } else {
+        reject(new Error('基金代码表加载失败'));
       }
-    }, 10000);
+    };
+    script.onerror = () => reject(new Error('基金代码表请求失败'));
+    document.head.appendChild(script);
   });
+
+  return fundCatalogPromise;
+}
+
+async function lookupFundName(code) {
+  try {
+    const catalog = await loadEastmoneyFundCatalog();
+    const matched = catalog.find(item => item[0] === code);
+    return matched ? matched[2] : `基金 ${code}`;
+  } catch {
+    return `基金 ${code}`;
+  }
+}
+
+// 获取基金历史净值 (通过东财 JSONP)
+function fetchFundHistory(code, pageSize = 30) {
+  return loadScriptJsonp(
+    callbackName => `https://api.fund.eastmoney.com/f10/lsjz?callback=${callbackName}&fundCode=${code}&pageIndex=1&pageSize=${pageSize}&startDate=&endDate=&_=${Date.now()}`,
+    'histCallback'
+  );
+}
+
+async function fetchFundQuote(code, fallbackName = '') {
+  const historyData = await fetchFundHistory(code, 5);
+  const latest = historyData?.Data?.LSJZList?.[0];
+  if (!latest || !latest.DWJZ) return null;
+
+  const fundName = fallbackName || await lookupFundName(code);
+
+  return {
+    fundcode: code,
+    name: fundName,
+    dwjz: latest.DWJZ,
+    gsz: latest.DWJZ,
+    gszzl: latest.JZZZL || '0',
+    jzrq: latest.FSRQ,
+    source: 'eastmoney-nav'
+  };
 }
 
 // 查询基金
@@ -186,9 +220,9 @@ async function searchFund() {
   showToast('正在查询基金信息...', '');
   
   try {
-    const data = await fetchFundEstimate(code);
+    const data = await fetchFundQuote(code);
     
-    if (!data || !data.name) {
+    if (!data || !data.dwjz) {
       showToast('未找到该基金，请检查代码', 'error');
       return;
     }
@@ -197,10 +231,10 @@ async function searchFund() {
     
     // 显示查询结果
     document.getElementById('fundSearchResult').style.display = 'block';
-    document.getElementById('previewFundName').textContent = data.name;
+    document.getElementById('previewFundName').textContent = data.name || `基金 ${data.fundcode}`;
     document.getElementById('previewFundCode').textContent = data.fundcode;
     document.getElementById('previewNav').textContent = data.dwjz + ' 元 (' + data.jzrq + ')';
-    document.getElementById('previewEstNav').textContent = data.gsz + ' 元';
+    document.getElementById('previewEstNav').textContent = `${data.gsz} 元 (东财最新净值)`;
     
     const changeVal = parseFloat(data.gszzl);
     const changeEl = document.getElementById('previewEstChange');
@@ -210,7 +244,7 @@ async function searchFund() {
     // 自动填入最新净值作为买入价参考
     document.getElementById('buyPrice').value = data.dwjz;
     
-    showToast('查询成功！', 'success');
+    showToast('查询成功，当前展示的是东财最新净值', 'success');
   } catch (err) {
     showToast('查询失败: ' + err.message, 'error');
   }
@@ -297,7 +331,7 @@ async function refreshAllFunds() {
 
   const results = await Promise.allSettled(
     funds.map(async fund => {
-      const data = await fetchFundEstimate(fund.code);
+      const data = await fetchFundQuote(fund.code, fund.name);
       return { fund, data };
     })
   );
@@ -309,7 +343,7 @@ async function refreshAllFunds() {
     }
 
     const { fund, data } = result.value;
-    if (data && data.gsz) {
+    if (data && data.dwjz) {
       fund.currentNav = toNumber(data.dwjz, fund.currentNav || fund.buyPrice);
       fund.estNav = toNumber(data.gsz, fund.estNav || fund.currentNav || fund.buyPrice);
       fund.estChange = toNumber(data.gszzl, fund.estChange);
@@ -341,8 +375,8 @@ async function refreshSingleFund(fundId) {
   if (!fund) return;
 
   try {
-    const data = await fetchFundEstimate(fund.code);
-    if (data && data.gsz) {
+    const data = await fetchFundQuote(fund.code, fund.name);
+    if (data && data.dwjz) {
       fund.currentNav = toNumber(data.dwjz, fund.currentNav || fund.buyPrice);
       fund.estNav = toNumber(data.gsz, fund.estNav || fund.currentNav || fund.buyPrice);
       fund.estChange = toNumber(data.gszzl, fund.estChange);
@@ -364,11 +398,11 @@ async function refreshSingleFund(fundId) {
 function renderFundList() {
   const funds = getFunds();
   const container = document.getElementById('fundList');
-  const emptyState = document.getElementById('emptyState');
 
   if (funds.length === 0) {
     container.innerHTML = '';
     container.appendChild(createEmptyState('fas fa-inbox', '暂无持仓基金', '点击"添加基金"开始管理您的投资组合'));
+    refreshPredictionFundOptions();
     return;
   }
 
@@ -401,11 +435,11 @@ function renderFundList() {
         </div>
         <div class="fund-card-body">
           <div class="fund-stat">
-            <span class="fund-stat-label">估算净值</span>
+            <span class="fund-stat-label">参考净值</span>
             <span class="fund-stat-value">${(fund.estNav || fund.currentNav || 0).toFixed(4)}</span>
           </div>
           <div class="fund-stat">
-            <span class="fund-stat-label">估算涨跌</span>
+            <span class="fund-stat-label">当日涨跌</span>
             <span class="fund-stat-value ${estChangeClass}">${fund.estChange >= 0 ? '+' : ''}${(fund.estChange || 0).toFixed(2)}%</span>
           </div>
           <div class="fund-stat">
@@ -421,7 +455,7 @@ function renderFundList() {
             <span class="fund-stat-value">${cost.toFixed(2)}</span>
           </div>
           <div class="fund-stat">
-            <span class="fund-stat-label">估算市值</span>
+            <span class="fund-stat-label">参考市值</span>
             <span class="fund-stat-value">${currentValue.toFixed(2)}</span>
           </div>
           <div class="fund-stat">
@@ -439,6 +473,8 @@ function renderFundList() {
       </div>
     `;
   }).join('');
+
+  refreshPredictionFundOptions();
 }
 
 // ==================== 更新汇总信息 ====================
@@ -618,6 +654,259 @@ function recordDailySnapshot(silent = false) {
   snapshots.sort((a, b) => a.date.localeCompare(b.date));
   saveSnapshots(snapshots);
   refreshCurrentTabViews();
+}
+
+// ==================== 基金预测 ====================
+
+function refreshPredictionFundOptions() {
+  const selectEl = document.getElementById('predictionFund');
+  const funds = getFunds();
+  if (!selectEl) return;
+
+  if (funds.length === 0) {
+    selectEl.innerHTML = '<option value="">暂无持仓基金</option>';
+    selectEl.disabled = true;
+    clearPredictionView();
+    return;
+  }
+
+  const previousValue = selectEl.value;
+  selectEl.disabled = false;
+  selectEl.innerHTML = funds.map(fund => (
+    `<option value="${fund.code}">${fund.name} (${fund.code})</option>`
+  )).join('');
+
+  const hasPrevious = funds.some(fund => fund.code === previousValue);
+  selectEl.value = hasPrevious ? previousValue : funds[0].code;
+}
+
+function clearPredictionView() {
+  const chartEl = document.getElementById('predictionChart');
+  const emptyEl = document.getElementById('predictionEmpty');
+  const summaryEl = document.getElementById('predictionSummary');
+
+  if (chartEl && window.Plotly) {
+    Plotly.purge(chartEl);
+  }
+  if (chartEl) chartEl.style.display = 'none';
+  if (summaryEl) {
+    summaryEl.style.display = 'none';
+    summaryEl.innerHTML = '';
+  }
+  if (emptyEl) emptyEl.style.display = 'block';
+}
+
+function getHistorySeries(historyResponse) {
+  const list = historyResponse?.Data?.LSJZList || historyResponse?.LSJZList || [];
+  return list
+    .map(item => ({
+      date: item.FSRQ || item.JZRQ || item.JzDate,
+      nav: toNumber(item.DWJZ ?? item.Nav)
+    }))
+    .filter(item => item.date && item.nav > 0)
+    .reverse();
+}
+
+function calculateMovingAverage(values, period) {
+  const window = values.slice(-period);
+  if (window.length === 0) return 0;
+  return window.reduce((sum, value) => sum + value, 0) / window.length;
+}
+
+function calculateDailyReturns(values) {
+  const returns = [];
+  for (let i = 1; i < values.length; i++) {
+    if (values[i - 1] > 0) {
+      returns.push((values[i] - values[i - 1]) / values[i - 1]);
+    }
+  }
+  return returns;
+}
+
+function calculateVolatility(values) {
+  const returns = calculateDailyReturns(values);
+  if (returns.length === 0) return 0;
+
+  const avg = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+  const variance = returns.reduce((sum, value) => sum + ((value - avg) ** 2), 0) / returns.length;
+  return Math.sqrt(variance) * 100;
+}
+
+function linearRegressionForecast(values, futureDays) {
+  if (values.length < 2) {
+    return Array.from({ length: futureDays }, () => values.at(-1) || 0);
+  }
+
+  const points = values.map((value, index) => ({ x: index, y: value }));
+  const count = points.length;
+  const sumX = points.reduce((sum, point) => sum + point.x, 0);
+  const sumY = points.reduce((sum, point) => sum + point.y, 0);
+  const sumXY = points.reduce((sum, point) => sum + point.x * point.y, 0);
+  const sumXX = points.reduce((sum, point) => sum + point.x * point.x, 0);
+
+  const denominator = count * sumXX - sumX * sumX;
+  const slope = denominator === 0 ? 0 : (count * sumXY - sumX * sumY) / denominator;
+  const intercept = (sumY - slope * sumX) / count;
+
+  return Array.from({ length: futureDays }, (_, index) => {
+    const predicted = intercept + slope * (values.length + index);
+    return Math.max(predicted, 0);
+  });
+}
+
+function addDays(dateString, days) {
+  const date = new Date(dateString);
+  date.setDate(date.getDate() + days);
+  return getLocalDateString(date);
+}
+
+function buildPredictionModel(series) {
+  const values = series.map(item => item.nav);
+  const recentValues = values.slice(-20);
+  const latestNav = recentValues.at(-1) || 0;
+  const ma5 = calculateMovingAverage(recentValues, Math.min(5, recentValues.length));
+  const ma10 = calculateMovingAverage(recentValues, Math.min(10, recentValues.length));
+  const momentumBase = recentValues.length > 5 ? recentValues.at(-6) : recentValues[0];
+  const momentum = momentumBase > 0 ? ((latestNav - momentumBase) / momentumBase) * 100 : 0;
+  const volatility = calculateVolatility(recentValues);
+  const forecastValues = linearRegressionForecast(recentValues, 5);
+  const predictedNav = forecastValues.at(-1) || latestNav;
+  const confidence = Math.max(25, Math.min(88, 90 - volatility * 6));
+
+  let trendLabel = '震荡';
+  if (ma5 > ma10 && momentum > 0) {
+    trendLabel = '偏强';
+  } else if (ma5 < ma10 && momentum < 0) {
+    trendLabel = '偏弱';
+  }
+
+  return {
+    latestNav,
+    ma5,
+    ma10,
+    momentum,
+    volatility,
+    predictedNav,
+    confidence,
+    trendLabel,
+    forecastValues
+  };
+}
+
+function renderPredictionSummary(fund, model) {
+  const summaryEl = document.getElementById('predictionSummary');
+  const trendClass = model.momentum >= 0 ? 'profit-positive' : 'profit-negative';
+  const delta = model.latestNav > 0 ? ((model.predictedNav - model.latestNav) / model.latestNav * 100) : 0;
+  const deltaClass = delta >= 0 ? 'profit-positive' : 'profit-negative';
+
+  summaryEl.innerHTML = `
+    <div class="prediction-card">
+      <span class="prediction-card-label">预测基金</span>
+      <span class="prediction-card-value">${fund.name}</span>
+      <div class="prediction-note">${fund.code}</div>
+    </div>
+    <div class="prediction-card">
+      <span class="prediction-card-label">趋势判断</span>
+      <span class="prediction-card-value ${trendClass}">${model.trendLabel}</span>
+      <div class="prediction-note">结合 5 日/10 日均线与动量</div>
+    </div>
+    <div class="prediction-card">
+      <span class="prediction-card-label">5 个交易日参考净值</span>
+      <span class="prediction-card-value ${deltaClass}">${model.predictedNav.toFixed(4)}</span>
+      <div class="prediction-note">${delta >= 0 ? '+' : ''}${delta.toFixed(2)}%</div>
+    </div>
+    <div class="prediction-card">
+      <span class="prediction-card-label">波动率 / 置信参考</span>
+      <span class="prediction-card-value">${model.volatility.toFixed(2)}%</span>
+      <div class="prediction-note">参考置信度 ${model.confidence.toFixed(0)}%</div>
+    </div>
+  `;
+  summaryEl.style.display = 'grid';
+}
+
+function renderPredictionChart(fund, series, model) {
+  const chartEl = document.getElementById('predictionChart');
+  const emptyEl = document.getElementById('predictionEmpty');
+  const historicalDates = series.map(item => item.date);
+  const historicalValues = series.map(item => item.nav);
+  const lastDate = historicalDates.at(-1);
+  const futureDates = model.forecastValues.map((_, index) => addDays(lastDate, index + 1));
+
+  emptyEl.style.display = 'none';
+  chartEl.style.display = 'block';
+
+  const traces = [
+    {
+      x: historicalDates,
+      y: historicalValues,
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: '历史净值',
+      line: { color: '#1a73e8', width: 3 },
+      marker: { size: 5 }
+    },
+    {
+      x: [lastDate, ...futureDates],
+      y: [historicalValues.at(-1), ...model.forecastValues],
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: '预测区间',
+      line: { color: '#f57c00', width: 3, dash: 'dash' },
+      marker: { size: 5 }
+    }
+  ];
+
+  const layout = {
+    title: { text: `${fund.name} 短期净值预测`, font: { size: 16 } },
+    xaxis: { title: '日期', tickangle: -45, gridcolor: '#f0f0f0' },
+    yaxis: { title: '净值(元)', gridcolor: '#f0f0f0' },
+    legend: { orientation: 'h', y: -0.2 },
+    margin: { t: 50, b: 80, l: 60, r: 30 },
+    plot_bgcolor: 'white',
+    paper_bgcolor: 'white',
+    hovermode: 'x unified'
+  };
+
+  Plotly.newPlot(chartEl, traces, layout, {
+    responsive: true,
+    displayModeBar: false
+  });
+}
+
+async function generatePrediction() {
+  const funds = getFunds();
+  if (funds.length === 0) {
+    clearPredictionView();
+    showToast('请先添加基金持仓', 'warning');
+    return;
+  }
+
+  const selectEl = document.getElementById('predictionFund');
+  const fund = funds.find(item => item.code === selectEl.value) || funds[0];
+  if (!fund) {
+    showToast('未找到可预测的基金', 'warning');
+    return;
+  }
+
+  showToast(`正在分析 ${fund.name} 的历史净值...`, '');
+
+  try {
+    const historyResponse = await fetchFundHistory(fund.code, 40);
+    const series = getHistorySeries(historyResponse);
+    if (series.length < 8) {
+      clearPredictionView();
+      showToast('历史净值数据不足，暂时无法预测', 'warning');
+      return;
+    }
+
+    const model = buildPredictionModel(series);
+    renderPredictionSummary(fund, model);
+    renderPredictionChart(fund, series, model);
+    showToast(`${fund.name} 预测分析已生成`, 'success');
+  } catch (err) {
+    clearPredictionView();
+    showToast('预测失败: ' + err.message, 'error');
+  }
 }
 
 // ==================== 收益曲线 ====================
